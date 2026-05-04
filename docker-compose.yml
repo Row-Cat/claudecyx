@@ -1,0 +1,24 @@
+services:
+  claudecyx:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: claudecyx
+    restart: unless-stopped
+    environment:
+      CLAUDE_SESSION_KEY: ${CLAUDE_SESSION_KEY}
+      CLAUDE_ORG_ID: ${CLAUDE_ORG_ID}
+      NTFY_URL: ${NTFY_URL:-https://ntfy.sh/claudecyx_alerts}
+      POLL_INTERVAL: ${POLL_INTERVAL:-1800}
+      REQUEST_TIMEOUT: ${REQUEST_TIMEOUT:-20}
+      MAX_BACKOFF_SECONDS: ${MAX_BACKOFF_SECONDS:-3600}
+      CLAUDE_USER_AGENT: ${CLAUDE_USER_AGENT:-claudecyx/1.0 (homelab)}
+      ALERT_THRESHOLD: ${ALERT_THRESHOLD:-0.90}
+      CRITICAL_THRESHOLD: ${CRITICAL_THRESHOLD:-0.95}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - monitor_net
+
+networks:
+  monitor_net:
+    external: true
