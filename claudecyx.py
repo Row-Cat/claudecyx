@@ -2,12 +2,10 @@ import logging
 import os
 import random
 import time
-from datetime import datetime, timezone
 from typing import Any
 
 import requests
 from dotenv import load_dotenv
-
 
 load_dotenv()
 
@@ -101,7 +99,9 @@ def monitor() -> None:
             response = fetch_usage(usage_url)
 
             if response.status_code == 429:
-                backoff_seconds = 5 if backoff_seconds == 0 else min(backoff_seconds * 2, MAX_BACKOFF_SECONDS)
+                backoff_seconds = (
+                    5 if backoff_seconds == 0 else min(backoff_seconds * 2, MAX_BACKOFF_SECONDS)
+                )
                 jitter = random.randint(0, 3)
                 sleep_for = backoff_seconds + jitter
                 logger.warning("Rate limited (429). Backing off for %ss", sleep_for)
@@ -111,7 +111,11 @@ def monitor() -> None:
             backoff_seconds = 0
 
             if response.status_code != 200:
-                logger.error("Unexpected status from Claude usage API: %s %s", response.status_code, response.text)
+                logger.error(
+                    "Unexpected status from Claude usage API: %s %s",
+                    response.status_code,
+                    response.text,
+                )
                 time.sleep(POLL_INTERVAL)
                 continue
 
@@ -122,8 +126,12 @@ def monitor() -> None:
             logger.info("utilization=%.4f resets_at=%s", utilization, resets_at)
 
             if resets_at and resets_at != last_reset_seen:
+                message = (
+                    f"Claude usage reset window detected at {resets_at}. "
+                    f"Current utilization: {utilization:.2%}"
+                )
                 send_alert(
-                    f"Claude usage reset window detected at {resets_at}. Current utilization: {utilization:.2%}",
+                    message,
                     priority="low",
                     tags="clock1",
                 )

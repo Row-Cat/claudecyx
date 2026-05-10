@@ -4,3 +4,5 @@ __pycache__/
 .codex/
 .codex*
 .agents/
+.venv/
+data/
