@@ -1,6 +1,7 @@
 import json
 import logging
-from dataclasses import dataclass
+import os
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -22,3 +23,12 @@ def load_state(path: Path) -> State:
     except (json.JSONDecodeError, TypeError, OSError) as exc:
         logger.warning("Failed to load state from %s: %s. Using default state.", path, exc)
         return State()
+
+
+def save_state(path: Path, state: State) -> None:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w") as f:
+        json.dump(asdict(state), f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)
