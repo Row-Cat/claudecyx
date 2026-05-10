@@ -16,5 +16,9 @@ class State:
 def load_state(path: Path) -> State:
     if not path.exists():
         return State()
-    raw = json.loads(path.read_text())
-    return State(**raw)
+    try:
+        raw = json.loads(path.read_text())
+        return State(**raw)
+    except (json.JSONDecodeError, TypeError, OSError) as exc:
+        logger.warning("Failed to load state from %s: %s. Using default state.", path, exc)
+        return State()
