@@ -2,12 +2,15 @@ import logging
 import os
 import random
 import time
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 import requests
 from dotenv import load_dotenv
 
+from state import State, load_state, save_state
 
 load_dotenv()
 
@@ -37,6 +40,76 @@ CRITICAL_THRESHOLD = float(os.getenv("CRITICAL_THRESHOLD", "0.95"))
 
 class ConfigError(RuntimeError):
     pass
+
+
+class AlertKind(StrEnum):
+    RESET = "reset"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+@dataclass(frozen=True)
+class Alert:
+    kind: AlertKind
+    message: str
+    priority: str
+    tags: str
+
+
+def evaluate(
+    utilization: float,
+    resets_at: str | None,
+    state: State,
+    warn_threshold: float,
+    crit_threshold: float,
+    org_id: str,
+) -> tuple[list[Alert], State]:
+    new_state = State(
+        last_reset_seen=state.last_reset_seen,
+        alerted_warning=state.alerted_warning,
+        alerted_critical=state.alerted_critical,
+    )
+    alerts: list[Alert] = []
+    if resets_at is not None and resets_at != new_state.last_reset_seen:
+        alerts.append(
+            Alert(
+                kind=AlertKind.RESET,
+                message=(
+                    f"Claude usage reset window detected at {resets_at}. "
+                    f"Current utilization: {utilization:.2%}"
+                ),
+                priority="low",
+                tags="clock1",
+            )
+        )
+        new_state.last_reset_seen = resets_at
+        new_state.alerted_warning = False
+        new_state.alerted_critical = False
+    if utilization >= crit_threshold and not new_state.alerted_critical:
+        alerts.append(
+            Alert(
+                kind=AlertKind.CRITICAL,
+                message=f"CRITICAL usage: {utilization:.2%} consumed for org {org_id}.",
+                priority="high",
+                tags="rotating_light",
+            )
+        )
+        new_state.alerted_critical = True
+    elif (
+        utilization >= warn_threshold
+        and not new_state.alerted_warning
+        and not new_state.alerted_critical
+    ):
+        alerts.append(
+            Alert(
+                kind=AlertKind.WARNING,
+                message=f"High usage: {utilization:.2%} consumed for org {org_id}.",
+                priority="default",
+                tags="warning",
+            )
+        )
+        new_state.alerted_warning = True
+    return alerts, new_state
 
 
 def validate_config() -> None:
@@ -92,16 +165,27 @@ def fetch_usage(url: str) -> requests.Response:
 def monitor() -> None:
     validate_config()
 
+    state_path = Path(os.getenv("STATE_PATH", "/data/state.json"))
+    state = load_state(state_path)
+    logger.info(
+        "Loaded state from %s: last_reset_seen=%s alerted_warning=%s alerted_critical=%s",
+        state_path,
+        state.last_reset_seen,
+        state.alerted_warning,
+        state.alerted_critical,
+    )
+
     usage_url = f"https://claude.ai/api/organizations/{CLAUDE_ORG_ID}/usage"
     backoff_seconds = 0
-    last_reset_seen: str | None = None
 
     while True:
         try:
             response = fetch_usage(usage_url)
 
             if response.status_code == 429:
-                backoff_seconds = 5 if backoff_seconds == 0 else min(backoff_seconds * 2, MAX_BACKOFF_SECONDS)
+                backoff_seconds = (
+                    5 if backoff_seconds == 0 else min(backoff_seconds * 2, MAX_BACKOFF_SECONDS)
+                )
                 jitter = random.randint(0, 3)
                 sleep_for = backoff_seconds + jitter
                 logger.warning("Rate limited (429). Backing off for %ss", sleep_for)
@@ -111,7 +195,11 @@ def monitor() -> None:
             backoff_seconds = 0
 
             if response.status_code != 200:
-                logger.error("Unexpected status from Claude usage API: %s %s", response.status_code, response.text)
+                logger.error(
+                    "Unexpected status from Claude usage API: %s %s",
+                    response.status_code,
+                    response.text,
+                )
                 time.sleep(POLL_INTERVAL)
                 continue
 
@@ -121,26 +209,19 @@ def monitor() -> None:
 
             logger.info("utilization=%.4f resets_at=%s", utilization, resets_at)
 
-            if resets_at and resets_at != last_reset_seen:
-                send_alert(
-                    f"Claude usage reset window detected at {resets_at}. Current utilization: {utilization:.2%}",
-                    priority="low",
-                    tags="clock1",
-                )
-                last_reset_seen = resets_at
+            alerts, state = evaluate(
+                utilization,
+                resets_at,
+                state,
+                ALERT_THRESHOLD,
+                CRITICAL_THRESHOLD,
+                CLAUDE_ORG_ID,
+            )
+            for alert in alerts:
+                logger.info("Firing %s alert: %s", alert.kind.value, alert.message)
+                send_alert(alert.message, priority=alert.priority, tags=alert.tags)
 
-            if utilization >= CRITICAL_THRESHOLD:
-                send_alert(
-                    f"CRITICAL usage: {utilization:.2%} consumed for org {CLAUDE_ORG_ID}.",
-                    priority="high",
-                    tags="rotating_light",
-                )
-            elif utilization >= ALERT_THRESHOLD:
-                send_alert(
-                    f"High usage: {utilization:.2%} consumed for org {CLAUDE_ORG_ID}.",
-                    priority="default",
-                    tags="warning",
-                )
+            save_state(state_path, state)
 
         except (requests.RequestException, ValueError) as exc:
             logger.error("Polling error: %s", exc)
