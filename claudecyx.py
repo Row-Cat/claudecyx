@@ -2,10 +2,14 @@ import logging
 import os
 import random
 import time
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 import requests
 from dotenv import load_dotenv
+
+from state import State, load_state, save_state  # noqa: F401
 
 load_dotenv()
 
@@ -35,6 +39,37 @@ CRITICAL_THRESHOLD = float(os.getenv("CRITICAL_THRESHOLD", "0.95"))
 
 class ConfigError(RuntimeError):
     pass
+
+
+class AlertKind(StrEnum):
+    RESET = "reset"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+@dataclass(frozen=True)
+class Alert:
+    kind: AlertKind
+    message: str
+    priority: str
+    tags: str
+
+
+def evaluate(
+    utilization: float,
+    resets_at: str | None,
+    state: State,
+    warn_threshold: float,
+    crit_threshold: float,
+    org_id: str,
+) -> tuple[list[Alert], State]:
+    new_state = State(
+        last_reset_seen=state.last_reset_seen,
+        alerted_warning=state.alerted_warning,
+        alerted_critical=state.alerted_critical,
+    )
+    alerts: list[Alert] = []
+    return alerts, new_state
 
 
 def validate_config() -> None:
