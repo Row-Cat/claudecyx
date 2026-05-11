@@ -16,6 +16,9 @@ services:
       ALERT_THRESHOLD: ${ALERT_THRESHOLD:-0.90}
       CRITICAL_THRESHOLD: ${CRITICAL_THRESHOLD:-0.95}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      STATE_PATH: ${STATE_PATH:-/data/state.json}
+    volumes:
+      - ./data:/data
     networks:
       - monitor_net
 
