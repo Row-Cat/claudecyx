@@ -4,12 +4,13 @@ import random
 import time
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 import requests
 from dotenv import load_dotenv
 
-from state import State, load_state, save_state  # noqa: F401
+from state import State, load_state, save_state
 
 load_dotenv()
 
@@ -164,9 +165,18 @@ def fetch_usage(url: str) -> requests.Response:
 def monitor() -> None:
     validate_config()
 
+    state_path = Path(os.getenv("STATE_PATH", "/data/state.json"))
+    state = load_state(state_path)
+    logger.info(
+        "Loaded state from %s: last_reset_seen=%s alerted_warning=%s alerted_critical=%s",
+        state_path,
+        state.last_reset_seen,
+        state.alerted_warning,
+        state.alerted_critical,
+    )
+
     usage_url = f"https://claude.ai/api/organizations/{CLAUDE_ORG_ID}/usage"
     backoff_seconds = 0
-    last_reset_seen: str | None = None
 
     while True:
         try:
@@ -199,30 +209,19 @@ def monitor() -> None:
 
             logger.info("utilization=%.4f resets_at=%s", utilization, resets_at)
 
-            if resets_at and resets_at != last_reset_seen:
-                message = (
-                    f"Claude usage reset window detected at {resets_at}. "
-                    f"Current utilization: {utilization:.2%}"
-                )
-                send_alert(
-                    message,
-                    priority="low",
-                    tags="clock1",
-                )
-                last_reset_seen = resets_at
+            alerts, state = evaluate(
+                utilization,
+                resets_at,
+                state,
+                ALERT_THRESHOLD,
+                CRITICAL_THRESHOLD,
+                CLAUDE_ORG_ID,
+            )
+            for alert in alerts:
+                logger.info("Firing %s alert: %s", alert.kind.value, alert.message)
+                send_alert(alert.message, priority=alert.priority, tags=alert.tags)
 
-            if utilization >= CRITICAL_THRESHOLD:
-                send_alert(
-                    f"CRITICAL usage: {utilization:.2%} consumed for org {CLAUDE_ORG_ID}.",
-                    priority="high",
-                    tags="rotating_light",
-                )
-            elif utilization >= ALERT_THRESHOLD:
-                send_alert(
-                    f"High usage: {utilization:.2%} consumed for org {CLAUDE_ORG_ID}.",
-                    priority="default",
-                    tags="warning",
-                )
+            save_state(state_path, state)
 
         except (requests.RequestException, ValueError) as exc:
             logger.error("Polling error: %s", exc)
