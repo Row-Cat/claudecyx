@@ -69,6 +69,16 @@ def evaluate(
         alerted_critical=state.alerted_critical,
     )
     alerts: list[Alert] = []
+    if utilization >= warn_threshold and not new_state.alerted_warning:
+        alerts.append(
+            Alert(
+                kind=AlertKind.WARNING,
+                message=f"High usage: {utilization:.2%} consumed for org {org_id}.",
+                priority="default",
+                tags="warning",
+            )
+        )
+        new_state.alerted_warning = True
     return alerts, new_state
 
 
