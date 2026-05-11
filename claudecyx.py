@@ -69,6 +69,21 @@ def evaluate(
         alerted_critical=state.alerted_critical,
     )
     alerts: list[Alert] = []
+    if resets_at is not None and resets_at != new_state.last_reset_seen:
+        alerts.append(
+            Alert(
+                kind=AlertKind.RESET,
+                message=(
+                    f"Claude usage reset window detected at {resets_at}. "
+                    f"Current utilization: {utilization:.2%}"
+                ),
+                priority="low",
+                tags="clock1",
+            )
+        )
+        new_state.last_reset_seen = resets_at
+        new_state.alerted_warning = False
+        new_state.alerted_critical = False
     if utilization >= crit_threshold and not new_state.alerted_critical:
         alerts.append(
             Alert(
