@@ -69,7 +69,21 @@ def evaluate(
         alerted_critical=state.alerted_critical,
     )
     alerts: list[Alert] = []
-    if utilization >= warn_threshold and not new_state.alerted_warning:
+    if utilization >= crit_threshold and not new_state.alerted_critical:
+        alerts.append(
+            Alert(
+                kind=AlertKind.CRITICAL,
+                message=f"CRITICAL usage: {utilization:.2%} consumed for org {org_id}.",
+                priority="high",
+                tags="rotating_light",
+            )
+        )
+        new_state.alerted_critical = True
+    elif (
+        utilization >= warn_threshold
+        and not new_state.alerted_warning
+        and not new_state.alerted_critical
+    ):
         alerts.append(
             Alert(
                 kind=AlertKind.WARNING,

@@ -37,3 +37,31 @@ def test_warning_fires_once_across_polls():
     assert alerts == []
     assert state.alerted_warning is True
     assert state.alerted_critical is False
+
+
+def test_critical_fires_once_across_polls():
+    state = State()
+    alerts, state = evaluate(0.96, None, state, 0.90, 0.95, "org")
+    assert len(alerts) == 1
+    assert alerts[0].kind == AlertKind.CRITICAL
+    assert alerts[0].priority == "high"
+    assert state.alerted_critical is True
+
+    alerts, state = evaluate(0.97, None, state, 0.90, 0.95, "org")
+    assert alerts == []
+
+    # Utilization drops to warning range — still no alert (CRITICAL already fired this window).
+    alerts, state = evaluate(0.92, None, state, 0.90, 0.95, "org")
+    assert alerts == []
+    assert state.alerted_warning is False
+    assert state.alerted_critical is True
+
+
+def test_critical_takes_precedence_over_warning_in_single_call():
+    state = State()
+    alerts, state = evaluate(0.96, None, state, 0.90, 0.95, "org")
+    assert len(alerts) == 1
+    assert alerts[0].kind == AlertKind.CRITICAL
+    # Critical fired; warning did NOT (mutually exclusive in one call).
+    assert state.alerted_warning is False
+    assert state.alerted_critical is True
