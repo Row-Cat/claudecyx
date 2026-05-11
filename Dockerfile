@@ -8,9 +8,10 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY claudecyx.py ./
+COPY claudecyx.py state.py ./
 
-RUN useradd --create-home --shell /usr/sbin/nologin cyberuser
+RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin cyberuser \
+ && mkdir /data && chown cyberuser:cyberuser /data
 USER cyberuser
 
 CMD ["python", "claudecyx.py"]
