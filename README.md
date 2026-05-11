@@ -33,6 +33,7 @@ Use environment variables (or copy `.env.example` to `.env`):
 - `ALERT_THRESHOLD` (default: `0.90`)
 - `CRITICAL_THRESHOLD` (default: `0.95`)
 - `LOG_LEVEL` (default: `INFO`)
+- `STATE_PATH` (default: `/data/state.json` in the container)
 
 ## Local Run
 
@@ -47,10 +48,24 @@ python claudecyx.py
 ## Docker Run
 
 ```bash
+mkdir -p data
 docker compose up -d --build
 ```
 
-The container is configured to join an external `monitor_net` network in `docker-compose.yml`, which fits a typical homelab stack layout.
+The container is configured to join an external `monitor_net` network in `docker-compose.yml`, which fits a typical homelab stack layout. Alert state persists across restarts in `./data/state.json`.
+
+## Development
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+ruff check .
+ruff format --check .
+pytest
+```
+
+CI runs the same three commands on every push and pull request.
 
 ## Security Notes
 
