@@ -121,13 +121,34 @@ def validate_config() -> None:
         raise ConfigError("Missing NTFY_URL")
 
 
-def parse_resets_at(payload: dict[str, Any]) -> str | None:
-    raw = payload.get("resets_at")
-    if not raw:
-        return None
-    if isinstance(raw, str):
-        return raw
-    return str(raw)
+USAGE_WINDOW = "five_hour"
+
+
+def parse_usage(payload: dict[str, Any]) -> tuple[float, str | None]:
+    """Extract (utilization as 0..1 fraction, resets_at) from a usage payload.
+
+    The Claude usage API nests windows under keys like "five_hour" and
+    "seven_day_*" and reports utilization on a 0–100 percent scale. We
+    monitor the five-hour window; a null window is a valid "no data" state.
+    Schema mismatches (missing keys) raise ValueError rather than silently
+    returning zero — defaulting masked this exact bug previously.
+    """
+    if USAGE_WINDOW not in payload:
+        raise ValueError(f"usage payload missing {USAGE_WINDOW!r} key")
+    window = payload[USAGE_WINDOW]
+    if window is None:
+        return 0.0, None
+    if "utilization" not in window:
+        raise ValueError(f"usage window {USAGE_WINDOW!r} missing 'utilization' key")
+    utilization = float(window["utilization"]) / 100.0
+    raw_resets = window.get("resets_at")
+    if raw_resets is None:
+        resets_at = None
+    elif isinstance(raw_resets, str):
+        resets_at = raw_resets
+    else:
+        resets_at = str(raw_resets)
+    return utilization, resets_at
 
 
 def send_alert(message: str, priority: str = "default", tags: str = "warning") -> None:
@@ -204,8 +225,7 @@ def monitor() -> None:
                 continue
 
             payload = response.json()
-            utilization = float(payload.get("utilization", 0.0))
-            resets_at = parse_resets_at(payload)
+            utilization, resets_at = parse_usage(payload)
 
             logger.info("utilization=%.4f resets_at=%s", utilization, resets_at)
 
