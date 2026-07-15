@@ -130,8 +130,12 @@ def evaluate_window(
         new_state["alerted_critical"] = True
         new_state["alerted_warning"] = True
 
-    # 3. At 95% of limit
-    elif utilization >= crit_threshold and not new_state.get("alerted_critical"):
+    # 3. At 95% of limit (Only alert if critical or limit haven't been triggered yet)
+    elif (
+        utilization >= crit_threshold
+        and not new_state.get("alerted_critical")
+        and not new_state.get("alerted_limit")
+    ):
         alerts.append(
             Alert(
                 kind=AlertKind.CRITICAL,
@@ -142,8 +146,13 @@ def evaluate_window(
         )
         new_state["alerted_critical"] = True
 
-    # 4. At 90% of limit
-    elif utilization >= warn_threshold and not new_state.get("alerted_warning"):
+    # 4. At 90% of limit (Only alert if warning, critical, or limit haven't been triggered yet)
+    elif (
+        utilization >= warn_threshold
+        and not new_state.get("alerted_warning")
+        and not new_state.get("alerted_critical")
+        and not new_state.get("alerted_limit")
+    ):
         alerts.append(
             Alert(
                 kind=AlertKind.WARNING,
