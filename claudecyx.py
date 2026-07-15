@@ -192,9 +192,7 @@ def monitor() -> None:
 
     state_path = Path(os.getenv("STATE_PATH", "/data/state.json"))
     state = load_state(state_path)
-    logger.info(
-        "Loaded state from %s. Tracking %d windows.", state_path, len(state.keys())
-    )
+    logger.info("Loaded state from %s. Tracking %d windows.", state_path, len(state.keys()))
 
     usage_url = f"https://claude.ai/api/organizations/{CLAUDE_ORG_ID}/usage"
     backoff_seconds = 0
@@ -205,9 +203,7 @@ def monitor() -> None:
 
             if response.status_code == 429:
                 backoff_seconds = (
-                    5
-                    if backoff_seconds == 0
-                    else min(backoff_seconds * 2, MAX_BACKOFF_SECONDS)
+                    5 if backoff_seconds == 0 else min(backoff_seconds * 2, MAX_BACKOFF_SECONDS)
                 )
                 jitter = random.randint(0, 3)
                 sleep_for = backoff_seconds + jitter
@@ -256,9 +252,7 @@ def monitor() -> None:
                 state[window_name] = updated_window_state
 
                 for alert in alerts:
-                    logger.info(
-                        "Firing %s alert: %s", alert.kind.value, alert.message
-                    )
+                    logger.info("Firing %s alert: %s", alert.kind.value, alert.message)
                     send_discord_alert(alert.message)
 
             save_state(state_path, state)
