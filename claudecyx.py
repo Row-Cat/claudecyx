@@ -75,13 +75,13 @@ def parse_usage_windows(payload: dict[str, Any]) -> dict[str, tuple[float, str |
         if key == "five_hour" or key.startswith("seven_day"):
             if "utilization" not in window:
                 continue
-            
+
             utilization = float(window["utilization"]) / 100.0
             raw_resets = window.get("resets_at")
             resets_at = str(raw_resets) if raw_resets is not None else None
-            
+
             windows[key] = (utilization, resets_at)
-            
+
     return windows
 
 
@@ -97,16 +97,16 @@ def evaluate_window(
 ) -> tuple[list[Alert], dict]:
     new_state = window_state.copy()
     alerts: list[Alert] = []
-    
+
     # 2. No limit (limits have expired)
     if resets_at is not None and resets_at != new_state.get("last_reset_seen"):
         alerts.append(
             Alert(
                 kind=AlertKind.RESET,
                 message=(
-                        f"[{window_name}] Limits expired/reset at {resets_at}. "
-                        f"Current utilization: {utilization:.2%}"
-                    ),
+                    f"[{window_name}] Limits expired/reset at {resets_at}. "
+                    f"Current utilization: {utilization:.2%}"
+                ),
                 priority="low",
                 tags="white_check_mark",
             )
@@ -129,7 +129,7 @@ def evaluate_window(
         new_state["alerted_limit"] = True
         new_state["alerted_critical"] = True
         new_state["alerted_warning"] = True
-        
+
     # 3. At 95% of limit
     elif utilization >= crit_threshold and not new_state.get("alerted_critical"):
         alerts.append(
@@ -141,7 +141,7 @@ def evaluate_window(
             )
         )
         new_state["alerted_critical"] = True
-        
+
     # 4. At 90% of limit
     elif utilization >= warn_threshold and not new_state.get("alerted_warning"):
         alerts.append(
@@ -153,7 +153,7 @@ def evaluate_window(
             )
         )
         new_state["alerted_warning"] = True
-        
+
     return alerts, new_state
 
 
@@ -166,7 +166,11 @@ def send_discord_alert(message: str) -> None:
             timeout=REQUEST_TIMEOUT,
         )
         if resp.status_code >= 400:
-            logger.error("Failed to publish alert to Discord (%s): %s", resp.status_code, resp.text)
+            logger.error(
+                "Failed to publish alert to Discord (%s): %s",
+                resp.status_code,
+                resp.text,
+            )
     except requests.RequestException as exc:
         logger.error("Failed to publish alert: %s", exc)
 
@@ -188,7 +192,9 @@ def monitor() -> None:
 
     state_path = Path(os.getenv("STATE_PATH", "/data/state.json"))
     state = load_state(state_path)
-    logger.info("Loaded state from %s. Tracking %d windows.", state_path, len(state.keys()))
+    logger.info(
+        "Loaded state from %s. Tracking %d windows.", state_path, len(state.keys())
+    )
 
     usage_url = f"https://claude.ai/api/organizations/{CLAUDE_ORG_ID}/usage"
     backoff_seconds = 0
@@ -199,7 +205,9 @@ def monitor() -> None:
 
             if response.status_code == 429:
                 backoff_seconds = (
-                    5 if backoff_seconds == 0 else min(backoff_seconds * 2, MAX_BACKOFF_SECONDS)
+                    5
+                    if backoff_seconds == 0
+                    else min(backoff_seconds * 2, MAX_BACKOFF_SECONDS)
                 )
                 jitter = random.randint(0, 3)
                 sleep_for = backoff_seconds + jitter
@@ -227,12 +235,12 @@ def monitor() -> None:
 
             for window_name, (utilization, resets_at) in windows.items():
                 logger.info(
-                    "[%s] utilization=%.4f resets_at=%s", 
-                    window_name, 
-                    utilization, 
-                    resets_at
+                    "[%s] utilization=%.4f resets_at=%s",
+                    window_name,
+                    utilization,
+                    resets_at,
                 )
-                
+
                 window_state = state.get(window_name, {})
                 alerts, updated_window_state = evaluate_window(
                     window_name,
@@ -244,11 +252,13 @@ def monitor() -> None:
                     LIMIT_THRESHOLD,
                     CLAUDE_ORG_ID,
                 )
-                
+
                 state[window_name] = updated_window_state
-                
+
                 for alert in alerts:
-                    logger.info("Firing %s alert: %s", alert.kind.value, alert.message)
+                    logger.info(
+                        "Firing %s alert: %s", alert.kind.value, alert.message
+                    )
                     send_discord_alert(alert.message)
 
             save_state(state_path, state)
