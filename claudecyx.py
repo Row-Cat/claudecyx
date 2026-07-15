@@ -103,7 +103,10 @@ def evaluate_window(
         alerts.append(
             Alert(
                 kind=AlertKind.RESET,
-                message=f"[{window_name}] Limits expired/reset at {resets_at}. Current utilization: {utilization:.2%}",
+                message=(
+                        f"[{window_name}] Limits expired/reset at {resets_at}. "
+                        f"Current utilization: {utilization:.2%}"
+                    ),
                 priority="low",
                 tags="white_check_mark",
             )
@@ -223,7 +226,12 @@ def monitor() -> None:
                 state = {}
 
             for window_name, (utilization, resets_at) in windows.items():
-                logger.info("[%s] utilization=%.4f resets_at=%s", window_name, utilization, resets_at)
+                logger.info(
+                    "[%s] utilization=%.4f resets_at=%s", 
+                    window_name, 
+                    utilization, 
+                    resets_at
+                )
                 
                 window_state = state.get(window_name, {})
                 alerts, updated_window_state = evaluate_window(
