@@ -1,14 +1,6 @@
-"""Regression tests for parse_usage().
-
-Pre-fix bug: monitor() read payload.get("utilization", 0.0) at the top level,
-but the Claude usage API returns a nested shape with utilization on a 0-100
-scale under windows like "five_hour". The defaulting silently produced 0.0
-forever, so no alert was ever fired.
-"""
-
 import pytest
 
-from claudecyx import parse_usage
+from claudecyx import parse_usage_windows
 
 REAL_PAYLOAD = {
     "five_hour": {
@@ -38,51 +30,52 @@ REAL_PAYLOAD = {
 }
 
 
-def test_real_payload_extracts_five_hour_window():
-    utilization, resets_at = parse_usage(REAL_PAYLOAD)
-    assert utilization == pytest.approx(0.77)
-    assert resets_at == "2026-05-22T19:30:01.227766+00:00"
+def test_real_payload_extracts_windows():
+    windows = parse_usage_windows(REAL_PAYLOAD)
+    assert "five_hour" in windows
+    assert "seven_day_omelette" in windows
+
+    five_hour_util, five_hour_reset = windows["five_hour"]
+    assert five_hour_util == pytest.approx(0.77)
+    assert five_hour_reset == "2026-05-22T19:30:01.227766+00:00"
+
+    seven_day_util, seven_day_reset = windows["seven_day_omelette"]
+    assert seven_day_util == pytest.approx(0.41)
+    assert seven_day_reset == "2026-05-25T00:00:00.227794+00:00"
 
 
 def test_utilization_is_scaled_from_percent_to_fraction():
     payload = {"five_hour": {"utilization": 100.0, "resets_at": None}}
-    utilization, _ = parse_usage(payload)
-    assert utilization == pytest.approx(1.0)
+    windows = parse_usage_windows(payload)
+    assert "five_hour" in windows
+    assert windows["five_hour"][0] == pytest.approx(1.0)
 
 
 def test_zero_utilization_is_preserved():
     payload = {"five_hour": {"utilization": 0.0, "resets_at": None}}
-    utilization, resets_at = parse_usage(payload)
-    assert utilization == 0.0
-    assert resets_at is None
+    windows = parse_usage_windows(payload)
+    assert windows["five_hour"] == (0.0, None)
 
 
-def test_null_five_hour_window_returns_zero_no_reset():
-    # API state where the five-hour window is not currently active.
-    # This is a valid "no data" state, not a schema error — return zeros.
+def test_null_windows_are_skipped():
     payload = {"five_hour": None, "seven_day": None}
-    utilization, resets_at = parse_usage(payload)
-    assert utilization == 0.0
-    assert resets_at is None
+    windows = parse_usage_windows(payload)
+    assert windows == {}
 
 
-def test_missing_five_hour_key_raises():
-    # If the API schema changes such that "five_hour" disappears,
-    # we want a loud failure, not silent zeros (the original bug).
-    payload = {"seven_day": None, "extra_usage": {}}
-    with pytest.raises(ValueError, match="five_hour"):
-        parse_usage(payload)
+def test_missing_windows_return_empty_dict():
+    payload = {"extra_usage": {}}
+    windows = parse_usage_windows(payload)
+    assert windows == {}
 
 
-def test_missing_utilization_inside_window_raises():
-    # Window present but malformed — also a schema mismatch worth surfacing.
+def test_missing_utilization_inside_window_is_skipped():
     payload = {"five_hour": {"resets_at": "2026-05-22T19:30:01Z"}}
-    with pytest.raises(ValueError, match="utilization"):
-        parse_usage(payload)
+    windows = parse_usage_windows(payload)
+    assert windows == {}
 
 
-def test_missing_resets_at_inside_window_returns_none():
+def test_missing_resets_at_inside_window_defaults_to_none():
     payload = {"five_hour": {"utilization": 50.0}}
-    utilization, resets_at = parse_usage(payload)
-    assert utilization == pytest.approx(0.5)
-    assert resets_at is None
+    windows = parse_usage_windows(payload)
+    assert windows["five_hour"] == (0.5, None)

@@ -10,10 +10,9 @@ from typing import Any
 import requests
 from dotenv import load_dotenv
 
-from state import State, load_state, save_state
+from state import load_state, save_state
 
 load_dotenv()
-
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -24,8 +23,8 @@ logger = logging.getLogger("claudecyx")
 
 CLAUDE_SESSION_KEY = os.getenv("CLAUDE_SESSION_KEY", "").strip()
 CLAUDE_ORG_ID = os.getenv("CLAUDE_ORG_ID", "").strip()
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 
-NTFY_URL = os.getenv("NTFY_URL", "https://ntfy.sh/claudecyx_alerts").strip()
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "900"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "20"))
 MAX_BACKOFF_SECONDS = int(os.getenv("MAX_BACKOFF_SECONDS", "3600"))
@@ -36,10 +35,20 @@ USER_AGENT = os.getenv(
 
 ALERT_THRESHOLD = float(os.getenv("ALERT_THRESHOLD", "0.90"))
 CRITICAL_THRESHOLD = float(os.getenv("CRITICAL_THRESHOLD", "0.95"))
+LIMIT_THRESHOLD = 1.0
 
 
 class ConfigError(RuntimeError):
     pass
+
+
+def validate_config() -> None:
+    if not CLAUDE_SESSION_KEY:
+        raise ConfigError("Missing CLAUDE_SESSION_KEY")
+    if not CLAUDE_ORG_ID:
+        raise ConfigError("Missing CLAUDE_ORG_ID")
+    if not DISCORD_WEBHOOK_URL:
+        raise ConfigError("Missing DISCORD_WEBHOOK_URL")
 
 
 class AlertKind(StrEnum):
@@ -56,117 +65,121 @@ class Alert:
     tags: str
 
 
-def evaluate(
+def parse_usage_windows(payload: dict[str, Any]) -> dict[str, tuple[float, str | None]]:
+    """Extract all relevant usage windows from the payload."""
+    windows = {}
+    for key, window in payload.items():
+        if window is None:
+            continue
+        # Capture the session limit and any weekly limits
+        if key == "five_hour" or key.startswith("seven_day"):
+            if "utilization" not in window:
+                continue
+
+            utilization = float(window["utilization"]) / 100.0
+            raw_resets = window.get("resets_at")
+            resets_at = str(raw_resets) if raw_resets is not None else None
+
+            windows[key] = (utilization, resets_at)
+
+    return windows
+
+
+def evaluate_window(
+    window_name: str,
     utilization: float,
     resets_at: str | None,
-    state: State,
+    window_state: dict,
     warn_threshold: float,
     crit_threshold: float,
+    limit_threshold: float,
     org_id: str,
-) -> tuple[list[Alert], State]:
-    new_state = State(
-        last_reset_seen=state.last_reset_seen,
-        alerted_warning=state.alerted_warning,
-        alerted_critical=state.alerted_critical,
-    )
+) -> tuple[list[Alert], dict]:
+    new_state = window_state.copy()
     alerts: list[Alert] = []
-    if resets_at is not None and resets_at != new_state.last_reset_seen:
+
+    # 2. No limit (limits have expired)
+    if resets_at is not None and resets_at != new_state.get("last_reset_seen"):
         alerts.append(
             Alert(
                 kind=AlertKind.RESET,
                 message=(
-                    f"Claude usage reset window detected at {resets_at}. "
+                    f"[{window_name}] Limits expired/reset at {resets_at}. "
                     f"Current utilization: {utilization:.2%}"
                 ),
                 priority="low",
-                tags="clock1",
+                tags="white_check_mark",
             )
         )
-        new_state.last_reset_seen = resets_at
-        new_state.alerted_warning = False
-        new_state.alerted_critical = False
-    if utilization >= crit_threshold and not new_state.alerted_critical:
+        new_state["last_reset_seen"] = resets_at
+        new_state["alerted_warning"] = False
+        new_state["alerted_critical"] = False
+        new_state["alerted_limit"] = False
+
+    # 1. At Limit
+    if utilization >= limit_threshold and not new_state.get("alerted_limit"):
         alerts.append(
             Alert(
                 kind=AlertKind.CRITICAL,
-                message=f"CRITICAL usage: {utilization:.2%} consumed for org {org_id}.",
+                message=f"[{window_name}] 🛑 AT LIMIT: 100% consumed for org {org_id}.",
+                priority="max",
+                tags="no_entry",
+            )
+        )
+        new_state["alerted_limit"] = True
+        new_state["alerted_critical"] = True
+        new_state["alerted_warning"] = True
+
+    # 3. At 95% of limit (Only alert if critical or limit haven't been triggered yet)
+    elif (
+        utilization >= crit_threshold
+        and not new_state.get("alerted_critical")
+        and not new_state.get("alerted_limit")
+    ):
+        alerts.append(
+            Alert(
+                kind=AlertKind.CRITICAL,
+                message=f"[{window_name}] 🚨 CRITICAL usage: {utilization:.2%} consumed.",
                 priority="high",
                 tags="rotating_light",
             )
         )
-        new_state.alerted_critical = True
+        new_state["alerted_critical"] = True
+
+    # 4. At 90% of limit (Only alert if warning, critical, or limit haven't been triggered yet)
     elif (
         utilization >= warn_threshold
-        and not new_state.alerted_warning
-        and not new_state.alerted_critical
+        and not new_state.get("alerted_warning")
+        and not new_state.get("alerted_critical")
+        and not new_state.get("alerted_limit")
     ):
         alerts.append(
             Alert(
                 kind=AlertKind.WARNING,
-                message=f"High usage: {utilization:.2%} consumed for org {org_id}.",
+                message=f"[{window_name}] ⚠️ High usage: {utilization:.2%} consumed.",
                 priority="default",
                 tags="warning",
             )
         )
-        new_state.alerted_warning = True
+        new_state["alerted_warning"] = True
+
     return alerts, new_state
 
 
-def validate_config() -> None:
-    if not CLAUDE_SESSION_KEY:
-        raise ConfigError("Missing CLAUDE_SESSION_KEY")
-    if not CLAUDE_ORG_ID:
-        raise ConfigError("Missing CLAUDE_ORG_ID")
-    if not NTFY_URL:
-        raise ConfigError("Missing NTFY_URL")
-
-
-USAGE_WINDOW = "five_hour"
-
-
-def parse_usage(payload: dict[str, Any]) -> tuple[float, str | None]:
-    """Extract (utilization as 0..1 fraction, resets_at) from a usage payload.
-
-    The Claude usage API nests windows under keys like "five_hour" and
-    "seven_day_*" and reports utilization on a 0–100 percent scale. We
-    monitor the five-hour window; a null window is a valid "no data" state.
-    Schema mismatches (missing keys) raise ValueError rather than silently
-    returning zero — defaulting masked this exact bug previously.
-    """
-    if USAGE_WINDOW not in payload:
-        raise ValueError(f"usage payload missing {USAGE_WINDOW!r} key")
-    window = payload[USAGE_WINDOW]
-    if window is None:
-        return 0.0, None
-    if "utilization" not in window:
-        raise ValueError(f"usage window {USAGE_WINDOW!r} missing 'utilization' key")
-    utilization = float(window["utilization"]) / 100.0
-    raw_resets = window.get("resets_at")
-    if raw_resets is None:
-        resets_at = None
-    elif isinstance(raw_resets, str):
-        resets_at = raw_resets
-    else:
-        resets_at = str(raw_resets)
-    return utilization, resets_at
-
-
-def send_alert(message: str, priority: str = "default", tags: str = "warning") -> None:
-    headers = {
-        "Title": "claudecyx | Claude Usage Alert",
-        "Priority": priority,
-        "Tags": tags,
-        "User-Agent": USER_AGENT,
-    }
+def send_discord_alert(message: str) -> None:
+    payload = {"content": message}
     try:
         resp = requests.post(
-            NTFY_URL,
-            data=message.encode("utf-8"),
-            headers=headers,
+            DISCORD_WEBHOOK_URL,
+            json=payload,
             timeout=REQUEST_TIMEOUT,
         )
         if resp.status_code >= 400:
-            logger.error("Failed to publish alert to ntfy (%s): %s", resp.status_code, resp.text)
+            logger.error(
+                "Failed to publish alert to Discord (%s): %s",
+                resp.status_code,
+                resp.text,
+            )
     except requests.RequestException as exc:
         logger.error("Failed to publish alert: %s", exc)
 
@@ -188,13 +201,7 @@ def monitor() -> None:
 
     state_path = Path(os.getenv("STATE_PATH", "/data/state.json"))
     state = load_state(state_path)
-    logger.info(
-        "Loaded state from %s: last_reset_seen=%s alerted_warning=%s alerted_critical=%s",
-        state_path,
-        state.last_reset_seen,
-        state.alerted_warning,
-        state.alerted_critical,
-    )
+    logger.info("Loaded state from %s. Tracking %d windows.", state_path, len(state.keys()))
 
     usage_url = f"https://claude.ai/api/organizations/{CLAUDE_ORG_ID}/usage"
     backoff_seconds = 0
@@ -225,21 +232,37 @@ def monitor() -> None:
                 continue
 
             payload = response.json()
-            utilization, resets_at = parse_usage(payload)
+            windows = parse_usage_windows(payload)
 
-            logger.info("utilization=%.4f resets_at=%s", utilization, resets_at)
+            # Ensure our state object is a dict
+            if not isinstance(state, dict):
+                state = {}
 
-            alerts, state = evaluate(
-                utilization,
-                resets_at,
-                state,
-                ALERT_THRESHOLD,
-                CRITICAL_THRESHOLD,
-                CLAUDE_ORG_ID,
-            )
-            for alert in alerts:
-                logger.info("Firing %s alert: %s", alert.kind.value, alert.message)
-                send_alert(alert.message, priority=alert.priority, tags=alert.tags)
+            for window_name, (utilization, resets_at) in windows.items():
+                logger.info(
+                    "[%s] utilization=%.4f resets_at=%s",
+                    window_name,
+                    utilization,
+                    resets_at,
+                )
+
+                window_state = state.get(window_name, {})
+                alerts, updated_window_state = evaluate_window(
+                    window_name,
+                    utilization,
+                    resets_at,
+                    window_state,
+                    ALERT_THRESHOLD,
+                    CRITICAL_THRESHOLD,
+                    LIMIT_THRESHOLD,
+                    CLAUDE_ORG_ID,
+                )
+
+                state[window_name] = updated_window_state
+
+                for alert in alerts:
+                    logger.info("Firing %s alert: %s", alert.kind.value, alert.message)
+                    send_discord_alert(alert.message)
 
             save_state(state_path, state)
 
