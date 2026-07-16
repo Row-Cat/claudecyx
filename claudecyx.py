@@ -98,30 +98,34 @@ def evaluate_window(
     new_state = window_state.copy()
     alerts: list[Alert] = []
 
-    # 2. No limit (limits have expired)
-    if resets_at is not None and resets_at != new_state.get("last_reset_seen"):
+    # Format the reset timestamp for inclusion in all messages
+    reset_info = f" (Resets at: {resets_at})" if resets_at else ""
+
+    # 1. Reset check: Did we drop below the warning threshold?
+    if utilization < warn_threshold and new_state.get("alerted_warning"):
         alerts.append(
             Alert(
                 kind=AlertKind.RESET,
                 message=(
-                    f"[{window_name}] Limits expired/reset at {resets_at}. "
-                    f"Current utilization: {utilization:.2%}"
+                    f"[{window_name}] 🟢 Utilization dropped to normal "
+                    f"({utilization:.2%}).{reset_info}"
                 ),
                 priority="low",
                 tags="white_check_mark",
             )
         )
-        new_state["last_reset_seen"] = resets_at
         new_state["alerted_warning"] = False
         new_state["alerted_critical"] = False
         new_state["alerted_limit"] = False
 
-    # 1. At Limit
+    # 2. At Limit
     if utilization >= limit_threshold and not new_state.get("alerted_limit"):
         alerts.append(
             Alert(
                 kind=AlertKind.CRITICAL,
-                message=f"[{window_name}] 🛑 AT LIMIT: 100% consumed for org {org_id}.",
+                message=(
+                    f"[{window_name}] 🛑 AT LIMIT: 100% consumed for org {org_id}.{reset_info}"
+                ),
                 priority="max",
                 tags="no_entry",
             )
@@ -130,33 +134,27 @@ def evaluate_window(
         new_state["alerted_critical"] = True
         new_state["alerted_warning"] = True
 
-    # 3. At 95% of limit (Only alert if critical or limit haven't been triggered yet)
-    elif (
-        utilization >= crit_threshold
-        and not new_state.get("alerted_critical")
-        and not new_state.get("alerted_limit")
-    ):
+    # 3. At 95% of limit
+    elif utilization >= crit_threshold and not new_state.get("alerted_critical"):
         alerts.append(
             Alert(
                 kind=AlertKind.CRITICAL,
-                message=f"[{window_name}] 🚨 CRITICAL usage: {utilization:.2%} consumed.",
+                message=(
+                    f"[{window_name}] 🚨 CRITICAL usage: {utilization:.2%} consumed.{reset_info}"
+                ),
                 priority="high",
                 tags="rotating_light",
             )
         )
         new_state["alerted_critical"] = True
+        new_state["alerted_warning"] = True
 
-    # 4. At 90% of limit (Only alert if warning, critical, or limit haven't been triggered yet)
-    elif (
-        utilization >= warn_threshold
-        and not new_state.get("alerted_warning")
-        and not new_state.get("alerted_critical")
-        and not new_state.get("alerted_limit")
-    ):
+    # 4. At 90% of limit
+    elif utilization >= warn_threshold and not new_state.get("alerted_warning"):
         alerts.append(
             Alert(
                 kind=AlertKind.WARNING,
-                message=f"[{window_name}] ⚠️ High usage: {utilization:.2%} consumed.",
+                message=(f"[{window_name}] ⚠️ High usage: {utilization:.2%} consumed.{reset_info}"),
                 priority="default",
                 tags="warning",
             )
